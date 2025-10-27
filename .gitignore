@@ -1,0 +1,5 @@
+metabase*
+/.clj-kondo/.cache
+/.lsp
+/plugins
+.DS_Store

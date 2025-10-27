@@ -1,0 +1,10 @@
+architecture: standalone
+
+auth:
+  username: readStoreUser
+  postgresPassword: newPostgresPassword123
+  password: newUserPassword123
+  database: readStore
+
+passwordUpdateJob:
+  enabled: true
