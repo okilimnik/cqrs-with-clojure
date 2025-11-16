@@ -2,3 +2,7 @@
 /.lsp
 /plugins
 .DS_Store
+/.idea
+/.calva
+/.cpcache
+*.iml

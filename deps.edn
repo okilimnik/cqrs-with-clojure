@@ -1,0 +1,2 @@
+{:paths ["src"]
+ :deps {software.amazon.awssdk/aws-sdk-java {:mvn/version "2.38.7"}}}
