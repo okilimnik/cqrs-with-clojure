@@ -22,3 +22,20 @@ Note that this example may create resources which cost money. Run `terraform des
 ```bash
 docker run -p 8000:8000 amazon/dynamodb-local
 ```
+
+### Run Postgres locally
+For Mac:
+```bash
+brew install postgresql@15
+brew services start postgresql@15
+echo 'export PATH="/usr/local/opt/postgresql@15/bin:$PATH"' >> ~/.zshrc
+createdb readdb
+psql readdb
+readdb=# CREATE USER postgres WITH ENCRYPTED PASSWORD 'postgres';
+CREATE ROLE
+readdb=# GRANT ALL PRIVILEGES ON DATABASE "readdb" to postgres;
+GRANT
+GRANT ALL ON SCHEMA public TO postgres;
+GRANT
+readdb=# \q
+```
