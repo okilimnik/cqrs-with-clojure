@@ -1,15 +1,13 @@
-(ns cqrs.messages.account.events
-  (:require
-   [cqrs.messages.message :refer [BaseMessage]]))
+(ns cqrs.messages.account.events)
 
-(defrecord BaseEvent [^BaseMessage base-message ^int version])
+(defrecord BaseEvent [base-message version])
 
-(defrecord AccountOpenedEvent [^BaseEvent base-event account-holder account-type created-date opening-balance])
+(defrecord AccountOpenedEvent [base-event account-holder account-type created-date opening-balance])
 
-(defrecord FundsDepositedEvent [^BaseEvent base-event amount])
+(defrecord FundsDepositedEvent [base-event amount])
 
-(defrecord FundsWithdrawnEvent [^BaseEvent base-event amount])
+(defrecord FundsWithdrawnEvent [base-event amount])
 
-(defrecord AccountClosedEvent [^BaseEvent base-event])
+(defrecord AccountClosedEvent [base-event])
 
-(defrecord FundsTransferredEvent [^BaseEvent base-event from-account-id to-account-id amount])
+(defrecord FundsTransferredEvent [base-event from-account-id to-account-id amount])

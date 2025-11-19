@@ -1,18 +1,14 @@
 (ns cqrs.db.write
+  (:require
+   [cqrs.infrastructure.event-store :as event-store])
   (:import
    (java.net URI)
    (software.amazon.awssdk.auth.credentials AwsBasicCredentials StaticCredentialsProvider)
    (software.amazon.awssdk.regions Region)
    (software.amazon.awssdk.services.dynamodb DynamoDbClient)
    (software.amazon.awssdk.services.dynamodb.model
-    AttributeDefinition
-    CreateTableRequest
     DescribeTableRequest
-    KeySchemaElement
-    KeyType
-    ProvisionedThroughput
-    ResourceNotFoundException
-    ScalarAttributeType)))
+    ResourceNotFoundException)))
 
 (defn get-table [^DynamoDbClient ddb table-name]
   (try
@@ -22,31 +18,6 @@
           response (.describeTable ddb request)]
       (.. response (table) (tableName)))
     (catch ResourceNotFoundException _ nil)))
-
-(defn create-table [^DynamoDbClient ddb table-name key!]
-  (let [db-waiter (.waiter ddb)
-        request (-> (CreateTableRequest/builder)
-                    (.attributeDefinitions [(-> (AttributeDefinition/builder)
-                                                (.attributeName key!)
-                                                (.attributeType ScalarAttributeType/S)
-                                                (.build))])
-                    (.keySchema [(-> (KeySchemaElement/builder)
-                                     (.attributeName key!)
-                                     (.keyType KeyType/HASH)
-                                     (.build))])
-                    (.provisionedThroughput (-> (ProvisionedThroughput/builder)
-                                                (.readCapacityUnits 10)
-                                                (.writeCapacityUnits 10)
-                                                (.build)))
-                    (.tableName table-name)
-                    (.build))
-        response (.createTable ddb request)
-        table-request (-> (DescribeTableRequest/builder)
-                          (.tableName table-name)
-                          (.build))
-        waiter-response (.waitUntilTableExists db-waiter table-request)
-        _ (.. waiter-response (matched) (response) (ifPresent prn))]
-    (.. response (tableDescription) (tableName))))
 
 (defn init
   "Initialize the EventStore.
@@ -66,10 +37,10 @@
                (-> builder
                    (.region Region/US_EAST_1)
                    (.build)))
-         table-name "EventStore"
-         key! "Event"]
+         table-name "EventStore"]
      (if (get-table ddb table-name)
        (prn "Table EventStore already exists")
        (do
-         (prn "Creating EventStore table")
-         (create-table ddb table-name key!))))))
+         (prn "Creating EventStore table with GSI")
+         (event-store/create-event-store-table ddb table-name)))
+     ddb)))

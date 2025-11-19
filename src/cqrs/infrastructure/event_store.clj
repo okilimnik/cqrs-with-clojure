@@ -1,7 +1,10 @@
 (ns cqrs.infrastructure.event-store
   "DynamoDB-based event store for event sourcing"
   (:require
-   [clojure.edn :as edn])
+   [clojure.edn :as edn]
+   [cqrs.messages.message :as msg]
+   [cqrs.messages.account.events :as events]
+   [cqrs.messages.schema.event :as event-model])
   (:import
    (software.amazon.awssdk.services.dynamodb DynamoDbClient)
    (software.amazon.awssdk.services.dynamodb.model
@@ -18,10 +21,21 @@
   [event]
   (pr-str event))
 
+(def edn-readers
+  "Custom EDN readers for deserializing records"
+  {'cqrs.messages.message.BaseMessage msg/map->BaseMessage
+   'cqrs.messages.account.events.BaseEvent events/map->BaseEvent
+   'cqrs.messages.account.events.AccountOpenedEvent events/map->AccountOpenedEvent
+   'cqrs.messages.account.events.FundsDepositedEvent events/map->FundsDepositedEvent
+   'cqrs.messages.account.events.FundsWithdrawnEvent events/map->FundsWithdrawnEvent
+   'cqrs.messages.account.events.AccountClosedEvent events/map->AccountClosedEvent
+   'cqrs.messages.account.events.FundsTransferredEvent events/map->FundsTransferredEvent
+   'cqrs.messages.schema.event.EventModel event-model/map->EventModel})
+
 (defn deserialize-event
-  "Deserialize event from EDN string"
+  "Deserialize event from EDN string with custom readers"
   [event-str]
-  (edn/read-string event-str))
+  (edn/read-string {:readers edn-readers} event-str))
 
 (defn ->attribute-value
   "Convert value to DynamoDB AttributeValue"
@@ -60,6 +74,7 @@
   [^DynamoDbClient ddb-client table-name aggregate-id]
   (let [request (-> (QueryRequest/builder)
                     (.tableName table-name)
+                    (.indexName "AggregateIdIndex")
                     (.keyConditionExpression "AggregateId = :aggId")
                     (.expressionAttributeValues
                      {":aggId" (->attribute-value aggregate-id)})

@@ -10,6 +10,7 @@
 
 (defrecord AggregateRoot [id version uncommitted-events]
   Aggregate
+  (apply-event [_ _] false)
   (get-uncommitted-events [this] uncommitted-events)
   (mark-events-committed [this] (assoc this :uncommitted-events []))
   (get-version [this] version))

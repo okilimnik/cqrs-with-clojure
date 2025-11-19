@@ -7,9 +7,6 @@
     GetItemRequest
     PutItemRequest
     QueryRequest
-    UpdateItemRequest
-    AttributeAction
-    AttributeValueUpdate
     CreateTableRequest
     AttributeDefinition
     KeySchemaElement
@@ -165,7 +162,7 @@
                     (.expressionAttributeValues
                      {":accId" (->attribute-value account-id)})
                     (.scanIndexForward false)  ;; Descending order (newest first)
-                    (.limit limit)
+                    (.limit (int limit))
                     (.build))
         response (.query ddb-client request)
         items (.items response)]

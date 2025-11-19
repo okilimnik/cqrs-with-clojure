@@ -105,7 +105,7 @@
                          closing_balance = ?,
                          daily_deposits = daily_balances.daily_deposits + ?,
                          transaction_count = daily_balances.transaction_count + 1"
-                      account-id (str balance-date) new-balance new-balance amount]))))
+                      account-id (str balance-date) new-balance amount new-balance amount]))))
 
 (defn handle-funds-withdrawn-pg
   "Project FundsWithdrawn event to Postgres"

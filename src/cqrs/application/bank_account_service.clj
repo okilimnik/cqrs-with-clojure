@@ -7,7 +7,7 @@
    [cqrs.infrastructure.postgres-projections :as pg-proj]
    [cqrs.queries.query-handler :as query]
    [cqrs.messages.commands :as commands]
-   [cqrs.messages.message :refer [->BaseMessage]])
+   [cqrs.messages.message :as msg])
   (:import
    [java.util Date UUID]))
 
@@ -43,7 +43,7 @@
 (defn open-account
   "Open a new bank account"
   [service account-id account-holder account-type opening-balance]
-  (let [base-message (->BaseMessage account-id (Date.) {})
+  (let [base-message (msg/->BaseMessage account-id (Date.) {})
         base-command (commands/->BaseCommand base-message)
         command (commands/->OpenAccountCommand base-command account-holder account-type opening-balance)
 
@@ -74,7 +74,7 @@
 (defn deposit-funds
   "Deposit funds into an account"
   [service account-id amount]
-  (let [base-message (->BaseMessage account-id (Date.) {})
+  (let [base-message (msg/->BaseMessage account-id (Date.) {})
         base-command (commands/->BaseCommand base-message)
         command (commands/->DepositFundsCommand base-command amount)
 
@@ -105,7 +105,7 @@
 (defn withdraw-funds
   "Withdraw funds from an account"
   [service account-id amount]
-  (let [base-message (->BaseMessage account-id (Date.) {})
+  (let [base-message (msg/->BaseMessage account-id (Date.) {})
         base-command (commands/->BaseCommand base-message)
         command (commands/->WithdrawFundsCommand base-command amount)
 
@@ -136,7 +136,7 @@
 (defn close-account
   "Close an account"
   [service account-id]
-  (let [base-message (->BaseMessage account-id (Date.) {})
+  (let [base-message (msg/->BaseMessage account-id (Date.) {})
         base-command (commands/->BaseCommand base-message)
         command (commands/->CloseAccountCommand base-command)
 
@@ -166,7 +166,7 @@
 (defn transfer-funds
   "Transfer funds between accounts"
   [service from-account-id to-account-id amount]
-  (let [base-message (->BaseMessage (str (UUID/randomUUID)) (Date.) {})
+  (let [base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
         base-command (commands/->BaseCommand base-message)
         command (commands/->TransferFundsCommand base-command from-account-id to-account-id amount)
 
@@ -254,6 +254,9 @@
   (def ddb (write/init {:local? true}))
   (def pg-db (read/init {:local? true}))
 
+  (dynamo-proj/create-account-balance-table ddb "AccountBalance")
+  (dynamo-proj/create-transaction-history-table ddb "TransactionHistory")
+
   ;; Create service
   (def service (create-service ddb pg-db))
 
@@ -275,8 +278,11 @@
   ;; Get account summary (complex - from Postgres)
   (get-account-summary service "acc-123")
 
+
+  (open-account service "acc-456" "Christina Aguilera" "CHECKING" 1000.0)
   ;; Transfer funds
   (transfer-funds service "acc-123" "acc-456" 100.0)
 
   ;; Close account
-  (close-account service "acc-123"))
+  (close-account service "acc-123")
+  )

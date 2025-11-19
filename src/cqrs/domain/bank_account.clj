@@ -3,7 +3,7 @@
   (:require
    [cqrs.domain.aggregate :as agg]
    [cqrs.messages.account.events :as events]
-   [cqrs.messages.message :refer [->BaseMessage]]
+   [cqrs.messages.message :as msg]
    [cqrs.messages.schema.event :refer [->EventModel]])
   (:import
    [java.util Date UUID]))
@@ -79,7 +79,7 @@
   (when (< opening-balance 0)
     (throw (ex-info "Opening balance cannot be negative" {:balance opening-balance})))
 
-  (let [base-message (->BaseMessage (str (UUID/randomUUID)) (Date.) {})
+  (let [base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
         base-event (events/->BaseEvent base-message 1)
         event-data (events/->AccountOpenedEvent
                     base-event
@@ -102,7 +102,7 @@
     (throw (ex-info "Deposit amount must be positive" {:amount amount})))
 
   (let [new-version (inc (:version account))
-        base-message (->BaseMessage (str (UUID/randomUUID)) (Date.) {})
+        base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
         base-event (events/->BaseEvent base-message new-version)
         event-data (events/->FundsDepositedEvent base-event amount)
         event (create-event (:id account) "FundsDeposited" event-data new-version)
@@ -123,7 +123,7 @@
     (throw (ex-info "Insufficient funds" {:balance (:balance account) :amount amount})))
 
   (let [new-version (inc (:version account))
-        base-message (->BaseMessage (str (UUID/randomUUID)) (Date.) {})
+        base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
         base-event (events/->BaseEvent base-message new-version)
         event-data (events/->FundsWithdrawnEvent base-event amount)
         event (create-event (:id account) "FundsWithdrawn" event-data new-version)
@@ -143,7 +143,7 @@
                     {:balance (:balance account)})))
 
   (let [new-version (inc (:version account))
-        base-message (->BaseMessage (str (UUID/randomUUID)) (Date.) {})
+        base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
         base-event (events/->BaseEvent base-message new-version)
         event-data (events/->AccountClosedEvent base-event)
         event (create-event (:id account) "AccountClosed" event-data new-version)
