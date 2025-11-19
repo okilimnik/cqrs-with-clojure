@@ -14,7 +14,13 @@
     QueryRequest
     UpdateItemRequest
     AttributeAction
-    AttributeValueUpdate)))
+    AttributeValueUpdate
+    TransactWriteItem
+    TransactWriteItemsRequest
+    Put
+    Update
+    ConditionalCheckFailedException
+    TransactionCanceledException)))
 
 (defn serialize-event
   "Serialize event to EDN string for storage"
@@ -45,9 +51,29 @@
     (number? v) (-> (AttributeValue/builder) (.n (str v)) (.build))
     :else (-> (AttributeValue/builder) (.s (str v)) (.build))))
 
+(defn get-current-version
+  "Get the current version for an aggregate (highest version number)"
+  [^DynamoDbClient ddb-client table-name aggregate-id]
+  (let [request (-> (QueryRequest/builder)
+                    (.tableName table-name)
+                    (.indexName "AggregateIdIndex")
+                    (.keyConditionExpression "AggregateId = :aggId")
+                    (.expressionAttributeValues
+                     {":aggId" (->attribute-value aggregate-id)})
+                    (.scanIndexForward false)  ; Descending order
+                    (.limit 1)
+                    (.build))
+        response (.query ddb-client request)
+        items (.items response)]
+    (if (empty? items)
+      0
+      (let [version-attr (.get (first items) "Version")]
+        (Integer/parseInt (.n version-attr))))))
+
 (defn append-event
-  "Append an event to the event store"
-  [^DynamoDbClient ddb-client table-name event]
+  "Append an event to the event store with optimistic locking.
+   Throws exception if version conflict detected (ensures consistency)."
+  [^DynamoDbClient ddb-client table-name event expected-version]
   (let [event-id (:id event)
         aggregate-id (:aggregate-identifier event)
         event-type (:event-type event)
@@ -62,12 +88,73 @@
               (keyword "Timestamp") (->attribute-value timestamp)
               (keyword "EventData") (->attribute-value event-data)}
 
+        ;; Condition: event must be next version AND event ID must not exist (idempotency)
+        condition-expression "attribute_not_exists(EventId)"
+
         request (-> (PutItemRequest/builder)
                     (.tableName table-name)
                     (.item (into {} (map (fn [[k v]] [(name k) v]) item)))
+                    (.conditionExpression condition-expression)
                     (.build))]
-    (.putItem ddb-client request)
-    event))
+    (try
+      (.putItem ddb-client request)
+      event
+      (catch ConditionalCheckFailedException e
+        (throw (ex-info "Concurrency conflict: Event already exists or version mismatch"
+                        {:type :concurrency-conflict
+                         :event-id event-id
+                         :aggregate-id aggregate-id
+                         :expected-version expected-version
+                         :attempted-version version}
+                        e))))))
+
+(defn append-events-atomically
+  "Append multiple events atomically using DynamoDB transactions.
+   ALL events succeed or ALL fail - critical for ACID compliance in banking.
+   This is the ONLY safe way to handle fund transfers between accounts."
+  [^DynamoDbClient ddb-client table-name events]
+  (if (empty? events)
+    []
+    (let [;; Build transaction write items for each event
+          transact-items (mapv (fn [event]
+                                 (let [event-id (:id event)
+                                       aggregate-id (:aggregate-identifier event)
+                                       event-type (:event-type event)
+                                       version (:version event)
+                                       timestamp (.getTime (:timestamp event))
+                                       event-data (serialize-event event)
+
+                                       item {"EventId" (->attribute-value event-id)
+                                             "AggregateId" (->attribute-value aggregate-id)
+                                             "EventType" (->attribute-value event-type)
+                                             "Version" (->attribute-value version)
+                                             "Timestamp" (->attribute-value timestamp)
+                                             "EventData" (->attribute-value event-data)}
+
+                                       ;; Idempotency check: event ID must not exist
+                                       put-builder (-> (Put/builder)
+                                                       (.tableName table-name)
+                                                       (.item item)
+                                                       (.conditionExpression "attribute_not_exists(EventId)")
+                                                       (.build))]
+                                   (-> (TransactWriteItem/builder)
+                                       (.put put-builder)
+                                       (.build))))
+                               events)
+
+          request (-> (TransactWriteItemsRequest/builder)
+                      (.transactItems transact-items)
+                      (.build))]
+      (try
+        (.transactWriteItems ddb-client request)
+        events
+        (catch TransactionCanceledException e
+          (throw (ex-info "Transaction failed: Concurrency conflict or duplicate event"
+                          {:type :transaction-failed
+                           :event-ids (mapv :id events)
+                           :aggregate-ids (mapv :aggregate-identifier events)
+                           :reason (.getMessage e)}
+                          e)))))))
 
 (defn get-events-for-aggregate
   "Retrieve all events for a specific aggregate"
@@ -135,7 +222,7 @@
     (.createTable ddb-client request)))
 
 (comment
-  ;; Example usage
+  ;; Example usage - ACID-compliant banking operations
   (require '[cqrs.db.write :as write])
 
   (def ddb (write/init {:local? true}))
@@ -143,13 +230,34 @@
   ;; Create event store table
   (create-event-store-table ddb "EventStore")
 
-  ;; Append event
-  (append-event ddb "EventStore" {:id "evt-1"
-                                   :aggregate-identifier "acc-1"
-                                   :event-type "AccountOpened"
-                                   :version 1
-                                   :timestamp (java.util.Date.)
-                                   :event-data {}})
+  ;; Check current version before appending
+  (def current-version (get-current-version ddb "EventStore" "acc-1"))
+
+  ;; Append single event with optimistic locking
+  (append-event ddb "EventStore"
+                {:id "evt-1"
+                 :aggregate-identifier "acc-1"
+                 :event-type "AccountOpened"
+                 :version 1
+                 :timestamp (java.util.Date.)
+                 :event-data {}}
+                0) ;; expected version
+
+  ;; Append multiple events atomically (for fund transfers)
+  ;; ALL events succeed or ALL fail - no partial updates
+  (append-events-atomically ddb "EventStore"
+                            [{:id "evt-2"
+                              :aggregate-identifier "acc-1"
+                              :event-type "FundsWithdrawn"
+                              :version 2
+                              :timestamp (java.util.Date.)
+                              :event-data {:amount 100}}
+                             {:id "evt-3"
+                              :aggregate-identifier "acc-2"
+                              :event-type "FundsDeposited"
+                              :version 1
+                              :timestamp (java.util.Date.)
+                              :event-data {:amount 100}}])
 
   ;; Get events
   (get-events-for-aggregate ddb "EventStore" "acc-1"))

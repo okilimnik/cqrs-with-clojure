@@ -26,17 +26,44 @@
 ;; Helper function to process events through both projections
 
 (defn process-events
-  "Process events through event store and projections"
+  "Process events through event store and projections.
+   CRITICAL FOR BANKING: Uses atomic DynamoDB transactions to ensure ALL events
+   are written or NONE are written. After successful event store write,
+   updates projections (which can be rebuilt from events if they fail)."
   [service events]
-  (doseq [event events]
-    ;; 1. Append to event store (DynamoDB)
-    (event-store/append-event (:ddb-client service) (:event-store-table service) event)
+  (try
+    ;; STEP 1: Write ALL events atomically to event store (source of truth)
+    ;; This is ACID-compliant: all events succeed or all fail
+    (event-store/append-events-atomically
+     (:ddb-client service)
+     (:event-store-table service)
+     events)
 
-    ;; 2. Project to DynamoDB simple projections (real-time)
-    (dynamo-proj/project-event (:ddb-client service) (:balance-table service) (:tx-table service) event)
+    ;; STEP 2: Update projections (best effort - can be rebuilt from events)
+    ;; Even if projections fail, events are safely stored and can be replayed
+    (doseq [event events]
+      (try
+        ;; Project to DynamoDB simple projections (real-time)
+        (dynamo-proj/project-event
+         (:ddb-client service)
+         (:balance-table service)
+         (:tx-table service)
+         event)
+        (catch Exception e
+          ;; Log projection error but don't fail the operation
+          ;; Projections can be rebuilt from event store
+          (println "WARNING: Projection failed for event" (:id event) "-" (.getMessage e))))
 
-    ;; 3. Project to Postgres read models (complex queries)
-    (pg-proj/project-event-to-postgres (:pg-datasource service) event)))
+      (try
+        ;; Project to Postgres read models (complex queries)
+        (pg-proj/project-event-to-postgres (:pg-datasource service) event)
+        (catch Exception e
+          ;; Log projection error but don't fail the operation
+          (println "WARNING: Postgres projection failed for event" (:id event) "-" (.getMessage e)))))
+
+    (catch clojure.lang.ExceptionInfo e
+      ;; Re-throw event store failures (these are critical)
+      (throw e))))
 
 ;; Command Execution Functions
 
