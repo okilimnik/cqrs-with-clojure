@@ -10,4 +10,6 @@
 
 (defrecord FundsWithdrawnEvent [^BaseEvent base-event amount])
 
-(defrecord AcoountClosedEvent [^BaseEvent base-event])
+(defrecord AccountClosedEvent [^BaseEvent base-event])
+
+(defrecord FundsTransferredEvent [^BaseEvent base-event from-account-id to-account-id amount])

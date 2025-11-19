@@ -11,3 +11,5 @@
 (defrecord WithdrawFundsCommand [^BaseCommand base-command amount])
 
 (defrecord CloseAccountCommand [^BaseCommand base-command])
+
+(defrecord TransferFundsCommand [^BaseCommand base-command from-account-id to-account-id amount])

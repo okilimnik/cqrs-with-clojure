@@ -1,4 +1,4 @@
-(ns cqrs.db.event-db
+(ns cqrs.db.write
   (:import
    (java.net URI)
    (software.amazon.awssdk.auth.credentials AwsBasicCredentials StaticCredentialsProvider)
