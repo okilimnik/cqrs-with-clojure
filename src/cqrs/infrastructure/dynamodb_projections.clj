@@ -237,9 +237,9 @@
 
 (comment
   ;; Example usage
-  (require '[cqrs.db.write :as write])
+  (require '[cqrs.infrastructure.event-store :as event-store])
 
-  (def ddb (write/init {:local? true}))
+  (def ddb (event-store/init {:local? true}))
 
   ;; Create projection tables
   (create-account-balance-table ddb "AccountBalance")

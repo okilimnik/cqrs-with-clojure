@@ -1,20 +1,8 @@
-(ns cqrs.queries.query-handler
+(ns cqrs.queries
   "Query handlers for complex read operations on Postgres read models"
   (:require
-   [next.jdbc :as jdbc]
-   [next.jdbc.sql :as sql]))
-
-;; Query Models
-
-(defrecord AccountDetailsQuery [account-id])
-(defrecord AccountsByHolderQuery [account-holder])
-(defrecord AccountsByStatusQuery [status])
-(defrecord TransactionHistoryQuery [account-id from-date to-date limit offset])
-(defrecord AccountSummaryQuery [account-id])
-(defrecord TopAccountsByBalanceQuery [limit])
-(defrecord DailyBalanceReportQuery [account-id from-date to-date])
-(defrecord TransactionVolumeReportQuery [from-date to-date])
-(defrecord AccountActivityReportQuery [account-holder])
+   [clojure.string :as str]
+   [next.jdbc :as jdbc]))
 
 ;; Query Handlers
 
@@ -189,7 +177,7 @@
                      max-amount (conj "amount <= ?")
                      (and from-date to-date) (conj "timestamp BETWEEN ? AND ?"))
         where-clause (if (seq conditions)
-                       (str " AND " (clojure.string/join " AND " conditions))
+                       (str " AND " (str/join " AND " conditions))
                        "")
         query (str base-query where-clause " ORDER BY timestamp DESC LIMIT ? OFFSET ?")
         params (cond-> []
@@ -202,86 +190,3 @@
                  true (conj limit)
                  true (conj offset))]
     (jdbc/execute! datasource (into [query] params))))
-
-;; Query Dispatcher
-
-(defprotocol QueryHandler
-  "Protocol for query handling"
-  (execute-query [this query datasource] "Execute a query and return results"))
-
-(defrecord AccountDetailsQueryHandler []
-  QueryHandler
-  (execute-query [_ query datasource]
-    (get-account-details datasource (:account-id query))))
-
-(defrecord AccountsByHolderQueryHandler []
-  QueryHandler
-  (execute-query [_ query datasource]
-    (get-accounts-by-holder datasource (:account-holder query))))
-
-(defrecord AccountsByStatusQueryHandler []
-  QueryHandler
-  (execute-query [_ query datasource]
-    (get-accounts-by-status datasource (:status query))))
-
-(defrecord TransactionHistoryQueryHandler []
-  QueryHandler
-  (execute-query [_ query datasource]
-    (get-transaction-history datasource
-                             (:account-id query)
-                             (:from-date query)
-                             (:to-date query)
-                             (:limit query)
-                             (:offset query))))
-
-(defrecord AccountSummaryQueryHandler []
-  QueryHandler
-  (execute-query [_ query datasource]
-    (get-account-summary datasource (:account-id query))))
-
-(def query-handlers
-  "Registry of query handlers"
-  {::AccountDetailsQuery (->AccountDetailsQueryHandler)
-   ::AccountsByHolderQuery (->AccountsByHolderQueryHandler)
-   ::AccountsByStatusQuery (->AccountsByStatusQueryHandler)
-   ::TransactionHistoryQuery (->TransactionHistoryQueryHandler)
-   ::AccountSummaryQuery (->AccountSummaryQueryHandler)})
-
-(defn dispatch-query
-  "Dispatch a query to its handler"
-  [query datasource]
-  (let [query-type (type query)
-        handler (get query-handlers query-type)]
-    (if handler
-      (execute-query handler query datasource)
-      (throw (ex-info "No handler found for query" {:query-type query-type})))))
-
-(comment
-  ;; Example usage
-  (require '[cqrs.db.read :as read])
-
-  (def pg-db (read/init {:local? true}))
-
-  ;; Get account details
-  (get-account-details pg-db "acc-1")
-
-  ;; Get accounts by holder
-  (get-accounts-by-holder pg-db "John Doe")
-
-  ;; Get transaction history
-  (get-transaction-history pg-db "acc-1"
-                           (java.sql.Timestamp. (.getTime (java.util.Date.)))
-                           (java.sql.Timestamp. (.getTime (java.util.Date.)))
-                           10 0)
-
-  ;; Get account summary
-  (get-account-summary pg-db "acc-1")
-
-  ;; Get top accounts
-  (get-top-accounts-by-balance pg-db 10)
-
-  ;; Search transactions
-  (search-transactions pg-db {:account-id "acc-1"
-                              :transaction-type "DEPOSIT"
-                              :min-amount 100.0
-                              :limit 20}))

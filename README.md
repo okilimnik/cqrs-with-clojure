@@ -146,13 +146,13 @@ clj
 #### 4. Initialize the System
 
 ```clojure
-(require '[cqrs.db.write :as write])
-(require '[cqrs.db.read :as read])
+(require '[cqrs.infrastructure.event-store :as event-store])
+(require '[cqrs.cqrs.infrastructure.postgres-projections :as pg-proj])
 (require '[cqrs.application.bank-account-service :as service])
 
 ;; Initialize databases
-(def ddb (write/init {:local? true}))
-(def pg-db (read/init {:local? true}))
+(def ddb (event-store/init {:local? true}))
+(def pg-db (pg-proj/init {:local? true}))
 
 ;; Create service
 (def bank-service (service/create-service ddb pg-db))

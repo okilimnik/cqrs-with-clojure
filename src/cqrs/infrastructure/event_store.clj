@@ -2,24 +2,23 @@
   "DynamoDB-based event store for event sourcing"
   (:require
    [clojure.edn :as edn]
-   [cqrs.messages.message :as msg]
-   [cqrs.messages.account.events :as events]
-   [cqrs.messages.schema.event :as event-model])
+   [cqrs.domain.bank-account.events :as events]
+   [cqrs.schemat-model])
   (:import
+   [java.net URI]
+   [software.amazon.awssdk.auth.credentials AwsBasicCredentials StaticCredentialsProvider]
+   (software.amazon.awssdk.regions Region)
    (software.amazon.awssdk.services.dynamodb DynamoDbClient)
    (software.amazon.awssdk.services.dynamodb.model
+    DescribeTableRequest
+    ResourceNotFoundException
     AttributeValue
-    GetItemRequest
+    ConditionalCheckFailedException
+    Put
     PutItemRequest
     QueryRequest
-    UpdateItemRequest
-    AttributeAction
-    AttributeValueUpdate
     TransactWriteItem
     TransactWriteItemsRequest
-    Put
-    Update
-    ConditionalCheckFailedException
     TransactionCanceledException)))
 
 (defn serialize-event
@@ -27,21 +26,10 @@
   [event]
   (pr-str event))
 
-(def edn-readers
-  "Custom EDN readers for deserializing records"
-  {'cqrs.messages.message.BaseMessage msg/map->BaseMessage
-   'cqrs.messages.account.events.BaseEvent events/map->BaseEvent
-   'cqrs.messages.account.events.AccountOpenedEvent events/map->AccountOpenedEvent
-   'cqrs.messages.account.events.FundsDepositedEvent events/map->FundsDepositedEvent
-   'cqrs.messages.account.events.FundsWithdrawnEvent events/map->FundsWithdrawnEvent
-   'cqrs.messages.account.events.AccountClosedEvent events/map->AccountClosedEvent
-   'cqrs.messages.account.events.FundsTransferredEvent events/map->FundsTransferredEvent
-   'cqrs.messages.schema.event.EventModel event-model/map->EventModel})
-
 (defn deserialize-event
   "Deserialize event from EDN string with custom readers"
   [event-str]
-  (edn/read-string {:readers edn-readers} event-str))
+  (edn/read-string {:readers events/edn-readers} event-str))
 
 (defn ->attribute-value
   "Convert value to DynamoDB AttributeValue"
@@ -221,43 +209,37 @@
                     (.build))]
     (.createTable ddb-client request)))
 
-(comment
-  ;; Example usage - ACID-compliant banking operations
-  (require '[cqrs.db.write :as write])
+(defn get-table [^DynamoDbClient ddb table-name]
+  (try
+    (let [request (-> (DescribeTableRequest/builder)
+                      (.tableName table-name)
+                      (.build))
+          response (.describeTable ddb request)]
+      (.. response (table) (tableName)))
+    (catch ResourceNotFoundException _ nil)))
 
-  (def ddb (write/init {:local? true}))
-
-  ;; Create event store table
-  (create-event-store-table ddb "EventStore")
-
-  ;; Check current version before appending
-  (def current-version (get-current-version ddb "EventStore" "acc-1"))
-
-  ;; Append single event with optimistic locking
-  (append-event ddb "EventStore"
-                {:id "evt-1"
-                 :aggregate-identifier "acc-1"
-                 :event-type "AccountOpened"
-                 :version 1
-                 :timestamp (java.util.Date.)
-                 :event-data {}}
-                0) ;; expected version
-
-  ;; Append multiple events atomically (for fund transfers)
-  ;; ALL events succeed or ALL fail - no partial updates
-  (append-events-atomically ddb "EventStore"
-                            [{:id "evt-2"
-                              :aggregate-identifier "acc-1"
-                              :event-type "FundsWithdrawn"
-                              :version 2
-                              :timestamp (java.util.Date.)
-                              :event-data {:amount 100}}
-                             {:id "evt-3"
-                              :aggregate-identifier "acc-2"
-                              :event-type "FundsDeposited"
-                              :version 1
-                              :timestamp (java.util.Date.)
-                              :event-data {:amount 100}}])
-
-  ;; Get events
-  (get-events-for-aggregate ddb "EventStore" "acc-1"))
+(defn init
+  "Initialize the EventStore.
+  Options:
+    :local? - If true, connects to local DynamoDB on http://localhost:8000"
+  ([] (init {}))
+  ([{:keys [local?] :or {local? false}}]
+   (let [builder (DynamoDbClient/builder)
+         ddb (if local?
+               (let [test-credentials (AwsBasicCredentials/create "test" "test")
+                     credentials-provider (StaticCredentialsProvider/create test-credentials)]
+                 (-> builder
+                     (.region Region/US_EAST_1)
+                     (.endpointOverride (URI/create "http://localhost:8000"))
+                     (.credentialsProvider credentials-provider)
+                     (.build)))
+               (-> builder
+                   (.region Region/US_EAST_1)
+                   (.build)))
+         table-name "EventStore"]
+     (if (get-table ddb table-name)
+       (prn "Table EventStore already exists")
+       (do
+         (prn "Creating EventStore table with GSI")
+         (create-event-store-table ddb table-name)))
+     ddb)))

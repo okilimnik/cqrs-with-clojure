@@ -1,12 +1,11 @@
 (ns cqrs.application.bank-account-service
-  "Application service that orchestrates commands, events, and projections"
+  "Application service that orchestrates commands and events.
+   Projections are now handled asynchronously via DynamoDB Streams."
   (:require
-   [cqrs.handlers.command-handler :as cmd]
    [cqrs.infrastructure.event-store :as event-store]
    [cqrs.infrastructure.dynamodb-projections :as dynamo-proj]
-   [cqrs.infrastructure.postgres-projections :as pg-proj]
-   [cqrs.queries.query-handler :as query]
-   [cqrs.messages.commands :as commands]
+   [cqrs.queries :as query]
+   [cqrs.domain.bank-account.commands :as commands]
    [cqrs.messages.message :as msg])
   (:import
    [java.util Date UUID]))
@@ -23,56 +22,31 @@
    "AccountBalance"
    "TransactionHistory"))
 
-;; Helper function to process events through both projections
+;; Helper function to process events
 
 (defn process-events
-  "Process events through event store and projections.
+  "Process events through event store ONLY.
+   Projections are now handled asynchronously via DynamoDB Streams.
+
    CRITICAL FOR BANKING: Uses atomic DynamoDB transactions to ensure ALL events
-   are written or NONE are written. After successful event store write,
-   updates projections (which can be rebuilt from events if they fail)."
+   are written or NONE are written. This is the ONLY operation that happens
+   synchronously - projections are eventually consistent via streams."
   [service events]
-  (try
-    ;; STEP 1: Write ALL events atomically to event store (source of truth)
-    ;; This is ACID-compliant: all events succeed or all fail
-    (event-store/append-events-atomically
-     (:ddb-client service)
-     (:event-store-table service)
-     events)
-
-    ;; STEP 2: Update projections (best effort - can be rebuilt from events)
-    ;; Even if projections fail, events are safely stored and can be replayed
-    (doseq [event events]
-      (try
-        ;; Project to DynamoDB simple projections (real-time)
-        (dynamo-proj/project-event
-         (:ddb-client service)
-         (:balance-table service)
-         (:tx-table service)
-         event)
-        (catch Exception e
-          ;; Log projection error but don't fail the operation
-          ;; Projections can be rebuilt from event store
-          (println "WARNING: Projection failed for event" (:id event) "-" (.getMessage e))))
-
-      (try
-        ;; Project to Postgres read models (complex queries)
-        (pg-proj/project-event-to-postgres (:pg-datasource service) event)
-        (catch Exception e
-          ;; Log projection error but don't fail the operation
-          (println "WARNING: Postgres projection failed for event" (:id event) "-" (.getMessage e)))))
-
-    (catch clojure.lang.ExceptionInfo e
-      ;; Re-throw event store failures (these are critical)
-      (throw e))))
+  ;; Write ALL events atomically to event store (source of truth)
+  ;; This is ACID-compliant: all events succeed or all fail
+  ;; DynamoDB Streams will pick up these events and trigger projections
+  (event-store/append-events-atomically
+   (:ddb-client service)
+   (:event-store-table service)
+   events))
 
 ;; Command Execution Functions
 
 (defn open-account
   "Open a new bank account"
   [service account-id account-holder account-type opening-balance]
-  (let [base-message (msg/->BaseMessage account-id (Date.) {})
-        base-command (commands/->BaseCommand base-message)
-        command (commands/->OpenAccountCommand base-command account-holder account-type opening-balance)
+  (let [base-message (msg/->BaseMessage account-id (Date.) {}) 
+        command (commands/->OpenAccountCommand base-message account-holder account-type opening-balance)
 
         ;; Get event history (for aggregate reconstitution)
         event-history (event-store/get-events-for-aggregate
@@ -87,7 +61,7 @@
                                 event-history)
 
         ;; Handle command
-        result (cmd/dispatch-command command event-store-map)
+        result (commands/handle command event-store-map)
         events (:events result)]
 
     ;; Process events through projections
@@ -102,8 +76,7 @@
   "Deposit funds into an account"
   [service account-id amount]
   (let [base-message (msg/->BaseMessage account-id (Date.) {})
-        base-command (commands/->BaseCommand base-message)
-        command (commands/->DepositFundsCommand base-command amount)
+        command (commands/->DepositFundsCommand base-message amount)
 
         ;; Get event history
         event-history (event-store/get-events-for-aggregate
@@ -117,7 +90,7 @@
                                 event-history)
 
         ;; Handle command
-        result (cmd/dispatch-command command event-store-map)
+        result (commands/handle command event-store-map)
         events (:events result)]
 
     ;; Process events
@@ -133,8 +106,7 @@
   "Withdraw funds from an account"
   [service account-id amount]
   (let [base-message (msg/->BaseMessage account-id (Date.) {})
-        base-command (commands/->BaseCommand base-message)
-        command (commands/->WithdrawFundsCommand base-command amount)
+        command (commands/->WithdrawFundsCommand base-message amount)
 
         ;; Get event history
         event-history (event-store/get-events-for-aggregate
@@ -148,7 +120,7 @@
                                 event-history)
 
         ;; Handle command
-        result (cmd/dispatch-command command event-store-map)
+        result (commands/handle command event-store-map)
         events (:events result)]
 
     ;; Process events
@@ -164,8 +136,7 @@
   "Close an account"
   [service account-id]
   (let [base-message (msg/->BaseMessage account-id (Date.) {})
-        base-command (commands/->BaseCommand base-message)
-        command (commands/->CloseAccountCommand base-command)
+        command (commands/->CloseAccountCommand base-message)
 
         ;; Get event history
         event-history (event-store/get-events-for-aggregate
@@ -179,7 +150,7 @@
                                 event-history)
 
         ;; Handle command
-        result (cmd/dispatch-command command event-store-map)
+        result (commands/handle command event-store-map)
         events (:events result)]
 
     ;; Process events
@@ -194,8 +165,7 @@
   "Transfer funds between accounts"
   [service from-account-id to-account-id amount]
   (let [base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
-        base-command (commands/->BaseCommand base-message)
-        command (commands/->TransferFundsCommand base-command from-account-id to-account-id amount)
+        command (commands/->TransferFundsCommand base-message from-account-id to-account-id amount)
 
         ;; Get event history for both accounts
         from-events (event-store/get-events-for-aggregate
@@ -212,7 +182,7 @@
                             (assoc to-account-id to-events))
 
         ;; Handle command
-        result (cmd/dispatch-command command event-store-map)
+        result (commands/handle command event-store-map)
         events (:events result)]
 
     ;; Process events
@@ -273,43 +243,51 @@
   (query/search-transactions (:pg-datasource service) filters))
 
 (comment
-  ;; Example usage
-  (require '[cqrs.db.write :as write])
-  (require '[cqrs.db.read :as read])
+  ;; Example usage - Decoupled CQRS with DynamoDB Streams 
+  (require '[cqrs.infrastructure.postgres-projections :as pg-proj])
+  (require '[cqrs.application.projection-service :as proj-service])
+  (require '[cqrs.infrastructure.stream-processor :as stream])
+  (import '(software.amazon.awssdk.services.dynamodbstreams DynamoDbStreamsClient))
 
   ;; Initialize databases
-  (def ddb (write/init {:local? true}))
-  (def pg-db (read/init {:local? true}))
+  (def ddb (event-store/init {:local? true}))
+  (def pg-db (pg-proj/init {:local? true}))
 
+  ;; Create projection tables
   (dynamo-proj/create-account-balance-table ddb "AccountBalance")
   (dynamo-proj/create-transaction-history-table ddb "TransactionHistory")
 
-  ;; Create service
+  ;; STEP 1: Start the projection service in a separate thread (simulates microservice)
+  (def streams-client
+    (-> (DynamoDbStreamsClient/builder)
+        (.endpointOverride (java.net.URI. "http://localhost:8000"))
+        (.build)))
+
+  (def proj-svc (proj-service/create-projection-service ddb pg-db))
+  (def projection-handler (proj-service/create-projection-handler proj-svc))
+  (def processor (stream/create-stream-processor ddb streams-client "EventStore" projection-handler))
+  (def running-processor (stream/start-processor processor))
+  ;; Now projections are handled asynchronously via DynamoDB Streams!
+
+  ;; STEP 2: Create command service (write side only)
   (def service (create-service ddb pg-db))
 
-  ;; Open an account
+  ;; Execute commands - events are written to EventStore
+  ;; DynamoDB Streams will automatically trigger projections
   (open-account service "acc-123" "John Doe" "CHECKING" 1000.0)
-
-  ;; Deposit funds
   (deposit-funds service "acc-123" 500.0)
-
-  ;; Withdraw funds
   (withdraw-funds service "acc-123" 200.0)
 
-  ;; Get balance (fast - from DynamoDB)
+  ;; Query read models (eventually consistent)
   (get-account-balance service "acc-123")
-
-  ;; Get recent transactions (fast - from DynamoDB)
   (get-recent-transactions service "acc-123" 10)
-
-  ;; Get account summary (complex - from Postgres)
   (get-account-summary service "acc-123")
 
-
+  ;; More commands
   (open-account service "acc-456" "Christina Aguilera" "CHECKING" 1000.0)
-  ;; Transfer funds
   (transfer-funds service "acc-123" "acc-456" 100.0)
-
-  ;; Close account
   (close-account service "acc-123")
+
+  ;; Stop the projection service
+  (stream/stop-processor running-processor)
   )

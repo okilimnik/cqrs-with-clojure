@@ -1,14 +1,34 @@
-(ns cqrs.domain.bank-account
+(ns cqrs.domain.bank-account.events
   "BankAccount aggregate root - maintains consistency boundaries"
   (:require
-   [cqrs.domain.aggregate :as agg]
-   [cqrs.messages.account.events :as events]
    [cqrs.messages.message :as msg]
-   [cqrs.messages.schema.event :refer [->EventModel]])
+   [cqrs.schema :refer [->EventModel ->BaseEvent map->BaseMessage map->BaseEvent map->EventModel]])
   (:import
    [java.util Date UUID]))
 
+(defrecord AccountOpenedEvent [base-event account-holder account-type created-date opening-balance])
+
+(defrecord FundsDepositedEvent [base-event amount])
+
+(defrecord FundsWithdrawnEvent [base-event amount])
+
+(defrecord AccountClosedEvent [base-event])
+
+(defrecord FundsTransferredEvent [base-event from-account-id to-account-id amount])
+
 (defrecord BankAccount [id account-holder account-type balance status created-date version uncommitted-events])
+
+
+(def edn-readers
+  "Custom EDN readers for deserializing records"
+  {'cqrs.messages.message.BaseMessage map->BaseMessage
+   'cqrs.messages.account.events.BaseEvent map->BaseEvent
+   'cqrs.messages.account.events.AccountOpenedEvent map->AccountOpenedEvent
+   'cqrs.messages.account.events.FundsDepositedEvent map->FundsDepositedEvent
+   'cqrs.messages.account.events.FundsWithdrawnEvent map->FundsWithdrawnEvent
+   'cqrs.messages.account.events.AccountClosedEvent map->AccountClosedEvent
+   'cqrs.messages.account.events.FundsTransferredEvent map->FundsTransferredEvent
+   'cqrs.messages.schema.event.EventModel map->EventModel})
 
 (defn create-event
   "Create an event with metadata"
@@ -80,8 +100,8 @@
     (throw (ex-info "Opening balance cannot be negative" {:balance opening-balance})))
 
   (let [base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
-        base-event (events/->BaseEvent base-message 1)
-        event-data (events/->AccountOpenedEvent
+        base-event (->BaseEvent base-message 1)
+        event-data (->AccountOpenedEvent
                     base-event
                     account-holder
                     account-type
@@ -103,8 +123,8 @@
 
   (let [new-version (inc (:version account))
         base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
-        base-event (events/->BaseEvent base-message new-version)
-        event-data (events/->FundsDepositedEvent base-event amount)
+        base-event (->BaseEvent base-message new-version)
+        event-data (->FundsDepositedEvent base-event amount)
         event (create-event (:id account) "FundsDeposited" event-data new-version)
         updated-account (apply-funds-deposited account event)]
     {:account (assoc updated-account :uncommitted-events [event])
@@ -124,8 +144,8 @@
 
   (let [new-version (inc (:version account))
         base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
-        base-event (events/->BaseEvent base-message new-version)
-        event-data (events/->FundsWithdrawnEvent base-event amount)
+        base-event (->BaseEvent base-message new-version)
+        event-data (->FundsWithdrawnEvent base-event amount)
         event (create-event (:id account) "FundsWithdrawn" event-data new-version)
         updated-account (apply-funds-withdrawn account event)]
     {:account (assoc updated-account :uncommitted-events [event])
@@ -144,8 +164,8 @@
 
   (let [new-version (inc (:version account))
         base-message (msg/->BaseMessage (str (UUID/randomUUID)) (Date.) {})
-        base-event (events/->BaseEvent base-message new-version)
-        event-data (events/->AccountClosedEvent base-event)
+        base-event (->BaseEvent base-message new-version)
+        event-data (->AccountClosedEvent base-event)
         event (create-event (:id account) "AccountClosed" event-data new-version)
         updated-account (apply-account-closed account event)]
     {:account (assoc updated-account :uncommitted-events [event])
