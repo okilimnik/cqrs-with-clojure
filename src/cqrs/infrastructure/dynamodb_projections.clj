@@ -26,28 +26,42 @@
     (boolean? v) (-> (AttributeValue/builder) (.bool v) (.build))
     :else (-> (AttributeValue/builder) (.s (str v)) (.build))))
 
+(defn create-table [attrs]
+  (mapv (fn [k]
+          (-> (AttributeDefinition/builder)
+              (.attributeName (name k))
+              (.attributeType (get attrs k))
+              (.build))) (keys attrs)))
+
+(defn create-indices [schema]
+  (mapv (fn [k]
+          (-> (KeySchemaElement/builder)
+              (.attributeName (name k))
+              (.keyType (get schema k))
+              (.build))) (keys schema)))
+
+(defn default-throughput []
+  (-> (ProvisionedThroughput/builder)
+      (.readCapacityUnits 10)
+      (.writeCapacityUnits 10)
+      (.build)))
+
 ;; Account Balance Projection (for fast balance lookups)
+
+(def account-balance-table
+  {:AccountId ScalarAttributeType/S})
+
+(def account-balance-indices 
+  {:AccountId KeyType/HASH})
 
 (defn create-account-balance-table
   "Create AccountBalance projection table"
   [^DynamoDbClient ddb-client table-name]
   (let [request (-> (CreateTableRequest/builder)
                     (.tableName table-name)
-                    (.attributeDefinitions
-                     [(-> (AttributeDefinition/builder)
-                          (.attributeName "AccountId")
-                          (.attributeType ScalarAttributeType/S)
-                          (.build))])
-                    (.keySchema
-                     [(-> (KeySchemaElement/builder)
-                          (.attributeName "AccountId")
-                          (.keyType KeyType/HASH)
-                          (.build))])
-                    (.provisionedThroughput
-                     (-> (ProvisionedThroughput/builder)
-                         (.readCapacityUnits 10)
-                         (.writeCapacityUnits 10)
-                         (.build)))
+                    (.attributeDefinitions (create-table account-balance-table))
+                    (.keySchema (create-indices account-balance-indices))
+                    (.provisionedThroughput (default-throughput))
                     (.build))]
     (.createTable ddb-client request)))
 
@@ -85,56 +99,36 @@
 
 ;; Transaction History Projection (for recent transactions)
 
+(def transaction-history-table
+  {:TransactionId ScalarAttributeType/S
+   :AccountId ScalarAttributeType/S
+   :Timestamp ScalarAttributeType/N})
+
+(def transaction-history-indices
+  {:TransactionId KeyType/HASH})
+
+(def transaction-history-secondary-indices
+  {:AccountId KeyType/HASH
+   :Timestamp KeyType/RANGE})
+
 (defn create-transaction-history-table
   "Create TransactionHistory projection table"
   [^DynamoDbClient ddb-client table-name]
   (let [request (-> (CreateTableRequest/builder)
                     (.tableName table-name)
-                    (.attributeDefinitions
-                     [(-> (AttributeDefinition/builder)
-                          (.attributeName "TransactionId")
-                          (.attributeType ScalarAttributeType/S)
-                          (.build))
-                      (-> (AttributeDefinition/builder)
-                          (.attributeName "AccountId")
-                          (.attributeType ScalarAttributeType/S)
-                          (.build))
-                      (-> (AttributeDefinition/builder)
-                          (.attributeName "Timestamp")
-                          (.attributeType ScalarAttributeType/N)
-                          (.build))])
-                    (.keySchema
-                     [(-> (KeySchemaElement/builder)
-                          (.attributeName "TransactionId")
-                          (.keyType KeyType/HASH)
-                          (.build))])
+                    (.attributeDefinitions (create-table transaction-history-table))
+                    (.keySchema (create-indices transaction-history-indices))
                     (.globalSecondaryIndexes
                      [(-> (GlobalSecondaryIndex/builder)
                           (.indexName "AccountIdTimestampIndex")
-                          (.keySchema
-                           [(-> (KeySchemaElement/builder)
-                                (.attributeName "AccountId")
-                                (.keyType KeyType/HASH)
-                                (.build))
-                            (-> (KeySchemaElement/builder)
-                                (.attributeName "Timestamp")
-                                (.keyType KeyType/RANGE)
-                                (.build))])
+                          (.keySchema (create-indices transaction-history-secondary-indices))
                           (.projection
                            (-> (Projection/builder)
                                (.projectionType ProjectionType/ALL)
                                (.build)))
-                          (.provisionedThroughput
-                           (-> (ProvisionedThroughput/builder)
-                               (.readCapacityUnits 10)
-                               (.writeCapacityUnits 10)
-                               (.build)))
+                          (.provisionedThroughput (default-throughput))
                           (.build))])
-                    (.provisionedThroughput
-                     (-> (ProvisionedThroughput/builder)
-                         (.readCapacityUnits 10)
-                         (.writeCapacityUnits 10)
-                         (.build)))
+                    (.provisionedThroughput (default-throughput))
                     (.build))]
     (.createTable ddb-client request)))
 
