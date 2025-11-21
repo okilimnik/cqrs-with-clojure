@@ -7,3 +7,6 @@
 /.cpcache
 *.iml
 .nrepl-port
+
+# Benchmark results
+/benchmark-results/
